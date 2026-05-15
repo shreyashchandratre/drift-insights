@@ -1,0 +1,25 @@
+# Node
+node_modules/
+dist/
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.env
+
+# Project Specific
+backend/data/*.joblib
+backend/data/*.csv
+!backend/data/baseline.csv
+!backend/data/demo_model.joblib
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
