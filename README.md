@@ -28,7 +28,7 @@
 
 ## 🛠️ Technology Stack
 
--   **Backend**: FastAPI (Python)
+-   **Backend**: FastAPI (Python), SQLite
 -   **Frontend**: React (Vite), Recharts, Framer Motion
 -   **ML & Drift**: River (ADWIN), SHAP, Scikit-learn, Pandas, XGBoost
 -   **Styling**: Tailwind CSS, Lucide React
@@ -65,11 +65,12 @@ npm run dev
 drift-insights/
 ├── backend/
 │   ├── app.py                     # FastAPI Server
+│   ├── db.py                      # SQLite Database Connection Manager
 │   ├── logic/
 │   │   ├── drift_detection.py     # ADWIN Logic
 │   │   ├── explainability.py      # SHAP Calculations
 │   │   ├── data_generation.py     # Simulation Logic
-│   │   ├── event_store.py         # Event Logging 
+│   │   ├── event_store.py         # SQLite Event Logging 
 │   │   └── report_generator.py    # PDF Export
 │   ├── adaptation/                
 │   │   └── feature_guided_retrain.py # Feature-Guided Weighting & Retraining
