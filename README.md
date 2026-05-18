@@ -1,26 +1,28 @@
 # 🌌 DriftInsights
 
-**DriftInsights** is an interactive, real-time dashboard designed for **Concept Drift Detection** and **XAI (Explainable AI) analysis**. It provides a seamless pipeline for data scientists and ML engineers to monitor how streaming data affects pre-trained models and interpret why model behavior changes over time using SHAP.
+**DriftInsights** is an advanced, interactive, real-time dashboard designed for **Concept Drift Detection, XAI (Explainable AI) Analysis, and Automated Model Adaptation**. It provides a seamless full-stack pipeline for data scientists and ML engineers to monitor how streaming data affects pre-trained models, interpret why model behavior changes over time using SHAP, and automatically adapt the model using intelligent retraining strategies.
 
 ---
 
-## 🚀 5-Step Detection Pipeline
+## 🚀 The 7-Step Explainable Drift Pipeline
 
-1.  **Model & Baseline Upload**: Load your `.joblib` model and training data to establish a performance baseline.
-2.  **New Data Injection**: Simulate synthetic drift or upload real post-deployment CSV streams.
-3.  **Drift Detection (ADWIN)**: Automatically pinpoint exact change points in model performance or feature distributions.
-4.  **SHAP Explainability**: Compute explanation shifts to see how feature importance has evolved after the drift event.
-5.  **Drift Severity Report**: Get a ranked analysis of top drifting features with a severity classification (Minor, Moderate, Severe).
+1.  **Model & Baseline Upload (Phase 0)**: Load your `.joblib` model and training data. Generates a comprehensive **Baseline Health Report** detailing initial SHAP feature importance, model confidence, and top drift vulnerabilities.
+2.  **New Data Injection (Phase 1)**: Simulate synthetic drift or upload real post-deployment CSV streams.
+3.  **Drift Detection (Phase 2)**: Automatically pinpoint exact change points in model performance using ADWIN.
+4.  **Drift Type Classification**: Upon ADWIN detection, the system immediately classifies the drift pattern into **SUDDEN, GRADUAL, INCREMENTAL, or RECURRING** based on error signal trends and historical overlap.
+5.  **SHAP Explainability (Phase 4)**: Compute explanation shifts ($\Delta E$) to see exactly how feature importance has evolved after the drift event.
+6.  **Severity Classification (Phase 5)**: Get a ranked analysis of top drifting features with an actionable severity classification (Minor, Moderate, Severe).
+7.  **Feature-Guided Retraining (Phase 6)**: The system automatically adapts your model by applying **Feature-Guided Retraining**. This process weights training samples dynamically based on the variance of the top drifting features, deploying the superior candidate (Standard vs. Feature-Guided) to memory and providing a downloadable `M_t+1` model.
 
 ---
 
-## ✨ Key Features
+## ✨ Advanced Capabilities
 
--   **Dual Detection Metrics**: Toggle between **Performance-based** (accuracy/confidence) and **Feature-based** (distribution shift) detection.
--   **Interactive Visualizations**: Real-time histograms, error rate signals, and SHAP delta bar charts.
--   **Automated Interpretation**: Generates a text summary identifying the top feature responsible for the drift.
--   **Demo Mode**: One-click initialization with the Breast Cancer dataset and a pre-trained RandomForest model.
--   **Premium Dark UI**: Modern dashboard built with React and Vite for a high-end visual experience.
+-   **Intelligent Drift Classification**: Automatically distinguishes between abrupt system shocks (Sudden) and slow-moving concept evolutions (Gradual).
+-   **Feature-Guided Adaptation**: Doesn't just retrain blindly—weights specific samples based on how much the crucial, drift-causing features have varied.
+-   **Baseline Explainability**: Creates a locked SHAP reference vector upon upload, highlighting highly skewed or vulnerable features before drift even happens.
+-   **Interactive Visualizations**: Real-time histograms, ADWIN error rate signals, SHAP delta bar charts, and Retraining Weight Distribution scatter plots.
+-   **Demo Mode**: One-click full pipeline simulation with built-in datasets and pre-trained models.
 
 ---
 
@@ -28,8 +30,8 @@
 
 -   **Backend**: FastAPI (Python)
 -   **Frontend**: React (Vite), Recharts, Framer Motion
--   **ML & Drift**: River (ADWIN), SHAP, Scikit-learn, Pandas
--   **Icons**: Lucide React
+-   **ML & Drift**: River (ADWIN), SHAP, Scikit-learn, Pandas, XGBoost
+-   **Styling**: Tailwind CSS, Lucide React
 
 ---
 
@@ -42,8 +44,8 @@
 ### 1. Backend Setup
 ```bash
 cd backend
-pip install -r requirements.txt # Or install: fastapi uvicorn river shap pandas scikit-learn joblib xgboost
-python app.py
+pip install -r requirements.txt # Requires: fastapi uvicorn river shap pandas scikit-learn joblib xgboost reportlab
+python -m uvicorn app:app --reload --host 0.0.0.0 --port 8000
 ```
 *The API will be available at `http://localhost:8000`.*
 
@@ -62,18 +64,26 @@ npm run dev
 ```text
 drift-insights/
 ├── backend/
-│   ├── app.py              # FastAPI Server
+│   ├── app.py                     # FastAPI Server
 │   ├── logic/
-│   │   ├── drift_detection.py  # ADWIN Logic
-│   │   ├── explainability.py   # SHAP Calculations
-│   │   └── data_generation.py  # Simulation Logic
-│   └── data/               # Demo Assets
-├── frontend/
-│   ├── src/
-│   │   ├── App.jsx         # Main React Dashboard
-│   │   └── App.css         # Custom Styles
-│   └── index.html
-└── README.md
+│   │   ├── drift_detection.py     # ADWIN Logic
+│   │   ├── explainability.py      # SHAP Calculations
+│   │   ├── data_generation.py     # Simulation Logic
+│   │   ├── event_store.py         # Event Logging 
+│   │   └── report_generator.py    # PDF Export
+│   ├── adaptation/                
+│   │   └── feature_guided_retrain.py # Feature-Guided Weighting & Retraining
+│   ├── detection/                 
+│   │   └── drift_type_classifier.py  # Sudden/Gradual/Incremental Classifier
+│   ├── explainability/            
+│   │   └── baseline_report.py        # Phase 0 Baseline Generation
+│   └── tests/                     # Pytest Unit Tests
+└── frontend/
+    └── src/
+        ├── App.jsx                # Main React Dashboard
+        ├── index.css              # Custom Tailwind & Styles
+        ├── api.js                 # Axios API bindings
+        └── components/            # Phase and Panel Components
 ```
 
 ---
@@ -82,7 +92,7 @@ drift-insights/
 
 The core innovation of DriftInsights is the calculation of **Delta E**:
 $$\Delta E_i = |\text{mean\_abs\_SHAP}(W_{after})_i - \text{mean\_abs\_SHAP}(W_{before})_i|$$
-This metric identifies not just that the data changed, but how the model's "internal logic" changed in response.
+This metric drives the *Feature-Guided Retraining* engine by indicating exactly which feature shifts demand the most model-adaptation attention.
 
 ---
 
