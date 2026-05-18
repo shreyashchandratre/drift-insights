@@ -1,464 +1,234 @@
-import React, { useState, useEffect } from 'react';
-import axios from 'axios';
-import { 
-  Upload, 
-  Activity, 
-  AlertTriangle, 
-  BarChart3, 
-  FileText, 
-  ChevronRight, 
-  Download, 
-  RefreshCw,
-  Info,
-  CheckCircle2,
-  ArrowUp,
-  ArrowDown
-} from 'lucide-react';
-import { 
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
-  BarChart, Bar, Cell,
-  AreaChart, Area
-} from 'recharts';
+import React, { useState, useCallback } from 'react';
+import { Activity, Settings, Play, RefreshCw, Clock } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import './App.css';
+import * as api from './api';
+import Stepper from './components/Stepper';
+import SettingsDrawer from './components/SettingsDrawer';
+import PhaseUpload from './components/PhaseUpload';
+import PhaseStream from './components/PhaseStream';
+import PhaseDetect from './components/PhaseDetect';
+import PhaseExplain from './components/PhaseExplain';
+import PhaseClassify from './components/PhaseClassify';
+import PhaseRetrain from './components/PhaseRetrain';
+import PhaseMonitor from './components/PhaseMonitor';
+import EventLog from './components/EventLog';
+import DriftTypeClassifier from './components/DriftTypeClassifier';
 
-const API_BASE = 'http://localhost:8000';
-
-function App() {
-  const [step, setStep] = useState(1);
+export default function App() {
+  const [phase, setPhase] = useState(0);
+  const [completed, setCompleted] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  
-  // Data State
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [eventsOpen, setEventsOpen] = useState(false);
+
+  // Pipeline data
   const [modelInfo, setModelInfo] = useState(null);
-  const [driftSimulation, setDriftSimulation] = useState(null);
-  const [driftResults, setDriftResults] = useState(null);
-  const [shapResults, setShapResults] = useState(null);
-  
-  // Simulation params
-  const [shiftAmount, setShiftAmount] = useState(1.0);
+  const [streamData, setStreamData] = useState(null);
+  const [driftResult, setDriftResult] = useState(null);
+  const [classificationResult, setClassificationResult] = useState(null);
+  const [shapResult, setShapResult] = useState(null);
+  const [adaptResult, setAdaptResult] = useState(null);
+  const [settings, setSettings] = useState({
+    adwin_delta: 0.002, minor_threshold: 0.15,
+    severe_threshold: 0.40, validation_threshold: 0.80,
+    cooldown_samples: 500, window_size: 200
+  });
 
-  const steps = [
-    { id: 1, label: 'Upload', icon: <Upload size={18} /> },
-    { id: 2, label: 'Inject Data', icon: <Activity size={18} /> },
-    { id: 3, label: 'Detect Drift', icon: <AlertTriangle size={18} /> },
-    { id: 4, label: 'SHAP Analysis', icon: <BarChart3 size={18} /> },
-    { id: 5, label: 'Report', icon: <FileText size={18} /> }
-  ];
-
-  const handleDemoMode = async () => {
-    setLoading(true);
-    try {
-      const res = await axios.get(`${API_BASE}/demo-mode`);
-      setModelInfo(res.data);
-      setStep(2);
-    } catch (err) {
-      setError("Failed to initialize demo mode");
-    } finally {
-      setLoading(false);
-    }
+  const advance = (p) => {
+    setCompleted(prev => [...new Set([...prev, phase])]);
+    setPhase(p);
   };
 
-  const handleModelUpload = async (e) => {
-    e.preventDefault();
-    const formData = new FormData();
-    formData.append('model_file', e.target.model.files[0]);
-    formData.append('csv_file', e.target.csv.files[0]);
-    
-    setLoading(true);
+  const handleDemo = useCallback(async () => {
+    setLoading(true); setError(null);
     try {
-      const res = await axios.post(`${API_BASE}/upload-model`, formData);
-      setModelInfo(res.data);
-      setStep(2);
-    } catch (err) {
-      setError("Upload failed. Check file formats.");
-    } finally {
-      setLoading(false);
-    }
-  };
+      const r = await api.initDemo();
+      setModelInfo(r.data);
+      advance(1);
+    } catch (e) { setError('Demo init failed: ' + (e.response?.data?.detail || e.message)); }
+    finally { setLoading(false); }
+  }, [phase]);
 
-  const handleNewDataUpload = async (e) => {
-    e.preventDefault();
-    const file = e.target.new_csv.files[0];
-    if (!file) return;
-
-    const formData = new FormData();
-    formData.append('csv_file', file);
-    
-    setLoading(true);
+  const handleUpload = useCallback(async (modelFile, csvFile) => {
+    setLoading(true); setError(null);
+    const fd = new FormData();
+    fd.append('model_file', modelFile);
+    fd.append('csv_file', csvFile);
     try {
-      const res = await axios.post(`${API_BASE}/upload-new-data`, formData);
-      setDriftSimulation(res.data);
-      setStep(3);
-    } catch (err) {
-      setError("New data upload failed. Check schema compatibility.");
-    } finally {
-      setLoading(false);
-    }
-  };
+      const r = await api.uploadModel(fd);
+      setModelInfo(r.data);
+      advance(1);
+    } catch (e) { setError('Upload failed: ' + (e.response?.data?.detail || e.message)); }
+    finally { setLoading(false); }
+  }, [phase]);
 
-  const handleSimulateDrift = async () => {
-    setLoading(true);
+  const handleStream = useCallback(async (mode, opts) => {
+    setLoading(true); setError(null);
     try {
-      const formData = new FormData();
-      formData.append('shift_amount', shiftAmount);
-      const res = await axios.post(`${API_BASE}/simulate-drift`, formData);
-      setDriftSimulation(res.data);
-      setStep(3);
-    } catch (err) {
-      setError("Simulation failed");
-    } finally {
-      setLoading(false);
-    }
-  };
+      let r;
+      if (mode === 'simulate') {
+        r = await api.simulateDrift(opts.shift, opts.numFeatures);
+      } else {
+        const fd = new FormData();
+        fd.append('csv_file', opts.file);
+        r = await api.uploadNewData(fd);
+      }
+      setStreamData(r.data);
+      advance(2);
+    } catch (e) { setError('Streaming failed: ' + (e.response?.data?.detail || e.message)); }
+    finally { setLoading(false); }
+  }, [phase]);
 
-  const [detectionMetric, setDetectionMetric] = useState('performance');
-
-  const handleDetectDrift = async () => {
-    setLoading(true);
+  const handleDetect = useCallback(async () => {
+    setLoading(true); setError(null);
     try {
-      const formData = new FormData();
-      formData.append('metric', detectionMetric);
-      const res = await axios.post(`${API_BASE}/detect-drift`, formData);
-      setDriftResults(res.data);
-      setStep(4);
-      // Automatically trigger SHAP after a small delay
-      setTimeout(() => triggerShap(), 1000);
-    } catch (err) {
-      setError("Detection failed");
-      setLoading(false);
-    }
-  };
+      const r = await api.detectDrift(settings.adwin_delta);
+      setDriftResult(r.data);
+      if (r.data.drift_detected) {
+        try {
+          const classRes = await api.classifyDriftType({
+            error_rate_series: r.data.error_signals,
+            change_point_index: r.data.change_point,
+            top_k_features: [],
+            drift_history: []
+          });
+          setClassificationResult(classRes.data);
+        } catch (e) { console.error('Classification failed:', e); }
+      }
+      advance(3);
+    } catch (e) { setError('Detection failed: ' + (e.response?.data?.detail || e.message)); }
+    finally { setLoading(false); }
+  }, [phase, settings]);
 
-  const triggerShap = async () => {
-    setLoading(true);
+  const handleShap = useCallback(async () => {
+    setLoading(true); setError(null);
     try {
-      const res = await axios.post(`${API_BASE}/shap-analysis`);
-      setShapResults(res.data);
-      setStep(5);
-    } catch (err) {
-      setError("SHAP analysis failed");
-    } finally {
-      setLoading(false);
-    }
-  };
+      const r = await api.runShap();
+      setShapResult(r.data);
+      advance(4);
+    } catch (e) { setError('SHAP failed: ' + (e.response?.data?.detail || e.message)); }
+    finally { setLoading(false); }
+  }, [phase]);
 
-  const downloadCSV = () => {
-    if (!shapResults) return;
-    const headers = "Feature,SHAP Before,SHAP After,Delta E,Direction\n";
-    const rows = shapResults.report.map(r => 
-      `${r.feature},${r.shap_before.toFixed(4)},${r.shap_after.toFixed(4)},${r.delta_e.toFixed(4)},${r.direction}`
-    ).join("\n");
-    
-    const blob = new Blob([headers + rows], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'drift_report.csv';
-    a.click();
+  const handleAdapt = useCallback(async () => {
+    setLoading(true); setError(null);
+    try {
+      const payload = {
+        severity: shapResult?.severity?.severity || 'MODERATE',
+        top_k_features: shapResult?.report?.slice(0, 3).map(r => r.feature) || [],
+        delta_e_scores: shapResult?.report?.slice(0, 3).reduce((acc, curr) => ({...acc, [curr.feature]: curr.delta_e}), {}) || {},
+        window_size: settings.window_size,
+        decay_rate: 0.005
+      };
+      const r = await api.runFeatureGuidedRetrain(payload);
+      setAdaptResult(r.data);
+      if (r.data.success) {
+        setModelInfo(prev => ({ ...prev, model_version: r.data.model_version }));
+      }
+      advance(6);
+    } catch (e) { setError('Adaptation failed: ' + (e.response?.data?.detail || e.message)); }
+    finally { setLoading(false); }
+  }, [phase]);
+
+  const handleRunFullDemo = useCallback(async () => {
+    setLoading(true); setError(null);
+    try {
+      const init = await api.initDemo();
+      setModelInfo(init.data);
+      setCompleted([0]); setPhase(1);
+      await new Promise(r => setTimeout(r, 800));
+
+      const full = await api.runDemoFull();
+      const p = full.data.phases;
+
+      setStreamData({ drifted_features: p[0].drifted_features, message: 'Demo drift simulated' });
+      setCompleted(c => [...c, 1]); setPhase(2);
+      await new Promise(r => setTimeout(r, 600));
+
+      setDriftResult({ drift_detected: p[1].drift_detected, change_point: p[1].change_point,
+        pre_drift_error: p[1].pre_drift_error, post_drift_error: p[1].post_drift_error,
+        error_change: (p[1].post_drift_error||0) - (p[1].pre_drift_error||0), drift_indices: [p[1].change_point] });
+      setCompleted(c => [...c, 2]); setPhase(3);
+      await new Promise(r => setTimeout(r, 600));
+
+      setShapResult({ report: p[2].report, delta_e_total: p[2].delta_e_total, severity: p[2].severity, shap_summary: p[2].shap_summary });
+      setCompleted(c => [...c, 3]); setPhase(4);
+      await new Promise(r => setTimeout(r, 600));
+
+      setCompleted(c => [...c, 4]); setPhase(5);
+      await new Promise(r => setTimeout(r, 600));
+
+      setAdaptResult(p[3]);
+      setModelInfo(prev => ({ ...prev, model_version: p[3].model_version }));
+      setCompleted(c => [...c, 5]); setPhase(6);
+    } catch (e) { setError('Demo failed: ' + (e.response?.data?.detail || e.message)); }
+    finally { setLoading(false); }
+  }, []);
+
+  const reset = () => {
+    setPhase(0); setCompleted([]); setModelInfo(null); setStreamData(null);
+    setDriftResult(null); setClassificationResult(null); setShapResult(null); setAdaptResult(null); setError(null);
   };
 
   return (
-    <div className="app-container">
-      <header>
-        <h1>DriftInsights</h1>
-        <p className="subtitle">Real-time Concept Drift Detection & XAI Pipeline</p>
+    <div className="min-h-screen bg-[#F8FAFC] font-sans pb-20">
+      {/* HEADER */}
+      <header className="sticky top-0 z-50 bg-white/95 backdrop-blur border-b border-slate-200 px-6 py-3 flex items-center justify-between shadow-sm">
+        <div className="flex items-center gap-3">
+          <div className="bg-[#6C63FF] p-2 rounded-lg text-white"><Activity size={20} /></div>
+          <div>
+            <h1 className="text-lg font-bold text-[#0F172A] leading-tight">DriftInsights</h1>
+            <p className="text-xs text-[#64748B]">Explainable Drift-Aware Adaptive ML Framework</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          {modelInfo && <span className="text-xs font-mono bg-slate-100 px-2 py-1 rounded border border-slate-200 text-[#64748B]">
+            {modelInfo.model_version || 'M_0'} • {modelInfo.model_type}
+          </span>}
+          <button onClick={() => setEventsOpen(true)} className="text-xs bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded border border-slate-200 text-[#64748B] transition-colors">
+            <Clock size={14} className="inline mr-1" />Event Log
+          </button>
+          <button onClick={handleRunFullDemo} disabled={loading}
+            className="flex items-center gap-2 bg-[#6C63FF] hover:bg-[#5B54E6] text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
+            {loading ? <RefreshCw size={16} className="animate-spin" /> : <Play size={16} />}
+            {loading ? 'Running...' : 'Run Full Demo'}
+          </button>
+          <button onClick={() => setSettingsOpen(true)} className="p-2 text-[#64748B] hover:text-[#0F172A] hover:bg-slate-100 rounded-lg transition-colors">
+            <Settings size={20} />
+          </button>
+        </div>
       </header>
 
-      {/* Progress Indicator */}
-      <div className="progress-container">
-        {steps.map(s => (
-          <div key={s.id} className={`progress-step ${step === s.id ? 'active' : ''} ${step > s.id ? 'completed' : ''}`}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              {s.icon} {s.label}
-            </span>
-          </div>
-        ))}
-      </div>
+      <Stepper phase={phase} completed={completed} onSelect={setPhase} />
 
-      <main>
+      <main className="max-w-6xl mx-auto mt-6 px-6 space-y-5">
         {error && (
-          <div className="alert alert-danger" onClick={() => setError(null)}>
-            <AlertTriangle size={20} />
-            {error}
+          <div className="bg-red-50 border border-red-200 text-red-800 p-3 rounded-lg text-sm flex items-center gap-2 cursor-pointer" onClick={() => setError(null)}>
+            ⚠️ {error} <span className="ml-auto text-xs text-red-400">Click to dismiss</span>
           </div>
         )}
 
         <AnimatePresence mode="wait">
-          {step === 1 && (
-            <motion.div 
-              key="step1"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="panel"
-            >
-              <h2 className="panel-title"><Upload /> Step 1: Model & Baseline Data</h2>
-              <form onSubmit={handleModelUpload}>
-                <div className="file-input-group">
-                  <label>Pre-trained Model (.joblib / .pkl)</label>
-                  <input type="file" name="model" required />
-                </div>
-                <div className="file-input-group">
-                  <label>Baseline CSV Dataset (Training Data)</label>
-                  <input type="file" name="csv" required />
-                </div>
-                <div style={{ display: 'flex', gap: '1rem' }}>
-                  <button type="submit" className="btn btn-primary" disabled={loading}>
-                    {loading ? <RefreshCw className="spinner-icon" /> : 'Upload & Initialize'}
-                  </button>
-                  <button type="button" className="btn btn-secondary" onClick={handleDemoMode} disabled={loading}>
-                    Try Demo Mode
-                  </button>
-                </div>
-              </form>
-            </motion.div>
-          )}
-
-          {step === 2 && (
-            <motion.div 
-              key="step2"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="panel"
-            >
-              <h2 className="panel-title"><Activity /> Step 2: New Data Injection</h2>
-              <div className="alert alert-success">
-                <CheckCircle2 size={20} />
-                Model Loaded: {modelInfo.model_type} | Features: {modelInfo.num_features}
-              </div>
-              
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
-                <div style={{ borderRight: '1px solid rgba(255,255,255,0.1)', paddingRight: '2rem' }}>
-                  <h3>Option A: Simulate Drift</h3>
-                  <div style={{ marginBottom: '1.5rem' }}>
-                    <label>Drift Intensity (Shift Mean): {shiftAmount}</label>
-                    <input 
-                      type="range" 
-                      min="0.1" 
-                      max="2.0" 
-                      step="0.1" 
-                      value={shiftAmount} 
-                      onChange={(e) => setShiftAmount(e.target.value)} 
-                      style={{ width: '100%', accentColor: 'var(--purple-main)' }}
-                    />
-                  </div>
-                  <button className="btn btn-primary" onClick={handleSimulateDrift} disabled={loading}>
-                    Simulate Drift
-                  </button>
-                </div>
-
-                <div>
-                  <h3>Option B: Upload New Stream</h3>
-                  <form onSubmit={handleNewDataUpload}>
-                    <div className="file-input-group">
-                      <label>New Incoming CSV File</label>
-                      <input type="file" name="new_csv" required />
-                    </div>
-                    <button type="submit" className="btn btn-secondary" disabled={loading}>
-                      Upload CSV Data
-                    </button>
-                  </form>
-                </div>
-              </div>
-            </motion.div>
-          )}
-
-          {step === 3 && (
-            <motion.div 
-              key="step3"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="panel"
-            >
-              <h2 className="panel-title"><AlertTriangle /> Step 3: Drift Detection</h2>
-              <p>Monitoring prediction error rates across the incoming stream...</p>
-              
-              <div style={{ display: 'flex', gap: '2rem', alignItems: 'flex-end', marginBottom: '2rem' }}>
-                <div style={{ flex: 1 }}>
-                  <label>Detection Metric</label>
-                  <select 
-                    value={detectionMetric} 
-                    onChange={(e) => setDetectionMetric(e.target.value)}
-                    style={{ 
-                      width: '100%', 
-                      padding: '0.75rem', 
-                      background: 'rgba(255,255,255,0.05)', 
-                      border: '1px solid rgba(255,255,255,0.1)', 
-                      borderRadius: '8px',
-                      color: 'white'
-                    }}
-                  >
-                    <option value="performance">Performance (Error Rate / Confidence)</option>
-                    <option value="feature">Feature Drift (Distribution Shift)</option>
-                  </select>
-                  <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginTop: '0.5rem' }}>
-                    {detectionMetric === 'performance' 
-                      ? "Best for detecting 'Concept Drift' where model accuracy actually drops." 
-                      : "Best for detecting 'Covariate Shift' where data distributions change but model might still be accurate."}
-                  </p>
-                </div>
-                <button className="btn btn-primary" onClick={handleDetectDrift} disabled={loading} style={{ height: '45px' }}>
-                  Run {detectionMetric === 'performance' ? 'ADWIN' : 'Feature'} Analysis
-                </button>
-              </div>
-
-              {driftSimulation && driftSimulation.dist_data && (
-                <div className="chart-container" style={{ marginTop: '2rem', height: 'auto' }}>
-                  <h3>Feature Distribution Shift (Top 3 Drifting)</h3>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1rem' }}>
-                    {driftSimulation.drifted_features.map(feat => (
-                      <div key={feat} style={{ height: '200px' }}>
-                        <p style={{ fontSize: '0.8rem', textAlign: 'center' }}>{feat}</p>
-                        <ResponsiveContainer width="100%" height="100%">
-                          <AreaChart data={driftSimulation.dist_data[feat].before.slice(0, 50).map((v, i) => ({ 
-                            index: i, 
-                            before: v, 
-                            after: driftSimulation.dist_data[feat].after[i] 
-                          }))}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-                            <Tooltip contentStyle={{ backgroundColor: '#1b1b3a', border: 'none' }} />
-                            <Area type="monotone" dataKey="before" stroke="var(--teal-accent)" fill="var(--teal-accent)" fillOpacity={0.1} />
-                            <Area type="monotone" dataKey="after" stroke="var(--purple-main)" fill="var(--purple-main)" fillOpacity={0.1} />
-                          </AreaChart>
-                        </ResponsiveContainer>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </motion.div>
-          )}
-
-          {(step === 4 || (step === 5 && loading)) && (
-            <motion.div 
-              key="step4"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="panel"
-            >
-              <div className="loading-overlay">
-                <div className="spinner"></div>
-                <h2 style={{ marginTop: '1.5rem' }}>Computing SHAP Explainability Shift...</h2>
-                <p style={{ color: 'var(--text-dim)' }}>Analyzing model internal logic changes</p>
-              </div>
-
-              {driftResults && (
-                <div className="chart-container">
-                  <h3>{detectionMetric === 'performance' ? 'Model Error Rate Signal' : 'Feature Distribution Signal'}</h3>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={driftResults.error_signals.map((v, i) => ({ x: i, y: v }))}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-                      <XAxis dataKey="x" hide />
-                      <YAxis domain={[0, 1]} />
-                      <Tooltip />
-                      <Line type="monotone" dataKey="y" stroke="var(--amber-accent)" dot={false} strokeWidth={2} />
-                      {driftResults.drift_indices.map(idx => (
-                        <ReferenceLine key={idx} x={idx} stroke="var(--red-accent)" label={{ value: 'Drift', position: 'top', fill: 'var(--red-accent)' }} />
-                      ))}
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-            </motion.div>
-          )}
-
-          {step === 5 && !loading && shapResults && (
-            <motion.div 
-              key="step5"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="panel"
-            >
-              <h2 className="panel-title"><FileText /> Step 5: Feature Importance Report</h2>
-              
-              <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap' }}>
-                <div className={`alert ${driftResults.drift_indices.length > 0 ? 'alert-warning' : 'alert-success'}`} style={{ flex: 1 }}>
-                  <Info size={20} />
-                  <div>
-                    <strong>Drift Status:</strong> {driftResults.drift_indices.length > 0 ? `Detected at sample ${driftResults.drift_indices[0]}` : "No Significant Drift"}
-                    <br />
-                    Pre-drift Error: {(driftResults.pre_drift_error * 100).toFixed(1)}% | Post-drift Error: {(driftResults.post_drift_error * 100).toFixed(1)}%
-                  </div>
-                </div>
-                
-                <div className="alert" style={{ background: 'rgba(255,255,255,0.05)', flex: 0.5 }}>
-                  <strong>Severity Index:</strong>
-                  <span className={`badge ${shapResults.delta_e_total < 0.15 ? 'badge-minor' : shapResults.delta_e_total < 0.40 ? 'badge-moderate' : 'badge-severe'}`}>
-                    {shapResults.delta_e_total < 0.15 ? 'MINOR' : shapResults.delta_e_total < 0.40 ? 'MODERATE' : 'SEVERE'}
-                  </span>
-                  <span style={{ marginLeft: '10px' }}>ΔE = {shapResults.delta_e_total.toFixed(3)}</span>
-                </div>
-              </div>
-
-              <div className="chart-container" style={{ height: '400px', marginTop: '2rem' }}>
-                <h3>Feature Importance Shift (Delta E)</h3>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={shapResults.report.slice(0, 10)} layout="vertical" margin={{ left: 50 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-                    <XAxis type="number" stroke="var(--text-dim)" />
-                    <YAxis dataKey="feature" type="category" stroke="var(--text-dim)" fontSize={11} width={120} />
-                    <Tooltip contentStyle={{ backgroundColor: '#1b1b3a', border: 'none' }} />
-                    <Bar dataKey="delta_e" radius={[0, 4, 4, 0]}>
-                      {shapResults.report.slice(0, 10).map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.direction === 'Up' ? 'var(--red-accent)' : 'var(--blue-accent)'} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-
-              <div style={{ marginTop: '2rem' }}>
-                <p>
-                  <strong>Summary:</strong> The top drifting feature is <span style={{color: 'var(--purple-main)'}}>{shapResults.report[0].feature}</span> with a Delta E of {shapResults.report[0].delta_e.toFixed(3)}, indicating the model has become <strong>{shapResults.report[0].direction === 'Up' ? 'more' : 'less'}</strong> reliant on this feature after the drift event.
-                </p>
-              </div>
-
-              <table>
-                <thead>
-                  <tr>
-                    <th>Feature Name</th>
-                    <th>SHAP Before</th>
-                    <th>SHAP After</th>
-                    <th>Delta E</th>
-                    <th>Direction</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {shapResults.report.slice(0, 5).map(r => (
-                    <tr key={r.feature}>
-                      <td>{r.feature}</td>
-                      <td>{r.shap_before.toFixed(4)}</td>
-                      <td>{r.shap_after.toFixed(4)}</td>
-                      <td>{r.delta_e.toFixed(4)}</td>
-                      <td>
-                        {r.direction === 'Up' ? 
-                          <span style={{color: 'var(--red-accent)', display: 'flex', alignItems: 'center', gap: '4px'}}><ArrowUp size={14}/> Up</span> : 
-                          <span style={{color: 'var(--blue-accent)', display: 'flex', alignItems: 'center', gap: '4px'}}><ArrowDown size={14}/> Down</span>
-                        }
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-
-              <div style={{ marginTop: '2rem', display: 'flex', gap: '1rem' }}>
-                <button className="btn btn-primary" onClick={downloadCSV}>
-                  <Download size={18} /> Download Full Report
-                </button>
-                <button className="btn btn-outline" onClick={() => setStep(1)}>
-                  <RefreshCw size={18} /> Restart Pipeline
-                </button>
-              </div>
-            </motion.div>
-          )}
+          <motion.div key={phase} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.25 }}>
+            {phase === 0 && <PhaseUpload onUpload={handleUpload} onDemo={handleDemo} loading={loading} modelInfo={modelInfo} />}
+            {phase === 1 && <PhaseStream onStream={handleStream} loading={loading} modelInfo={modelInfo} features={modelInfo?.features || []} />}
+            {phase === 2 && (
+              <>
+                <PhaseDetect onDetect={handleDetect} loading={loading} streamData={streamData} driftResult={driftResult} />
+                {classificationResult && <DriftTypeClassifier classification={classificationResult} driftResult={driftResult} />}
+              </>
+            )}
+            {phase === 3 && <PhaseExplain onRunShap={handleShap} loading={loading} driftResult={driftResult} shapResult={shapResult} />}
+            {phase === 4 && <PhaseClassify shapResult={shapResult} onNext={() => advance(5)} />}
+            {phase === 5 && <PhaseRetrain onAdapt={handleAdapt} loading={loading} shapResult={shapResult} adaptResult={adaptResult} />}
+            {phase === 6 && <PhaseMonitor modelInfo={modelInfo} driftResult={driftResult} shapResult={shapResult} adaptResult={adaptResult} onReset={reset} />}
+          </motion.div>
         </AnimatePresence>
       </main>
+
+      <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} settings={settings} setSettings={setSettings} />
+      <EventLog open={eventsOpen} onClose={() => setEventsOpen(false)} />
     </div>
   );
 }
-
-export default App;
