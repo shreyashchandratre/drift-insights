@@ -1,24 +1,17 @@
-"""
-Event Store — Structured audit trail for all DriftInsights system events.
-Logs predictions, drift alerts, SHAP results, adaptations, and deployments.
-"""
-import json
 import os
 import time
 import uuid
+import json
 from datetime import datetime
 
-EVENT_LOG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "event_log.json")
-
-def _ensure_log():
-    os.makedirs(os.path.dirname(EVENT_LOG_PATH), exist_ok=True)
-    if not os.path.exists(EVENT_LOG_PATH):
-        with open(EVENT_LOG_PATH, "w") as f:
-            json.dump([], f)
+try:
+    from db import get_db
+    DB_AVAILABLE = True
+except ImportError:
+    DB_AVAILABLE = False
 
 def log_event(event_type: str, payload: dict) -> dict:
-    """Append an event to the JSON event store and return it."""
-    _ensure_log()
+    """Append an event to the SQLite event store and return it."""
     event = {
         "id": str(uuid.uuid4())[:8],
         "timestamp": datetime.utcnow().isoformat() + "Z",
@@ -26,24 +19,51 @@ def log_event(event_type: str, payload: dict) -> dict:
         "type": event_type,
         "payload": payload
     }
-    with open(EVENT_LOG_PATH, "r+") as f:
-        events = json.load(f)
-        events.append(event)
-        f.seek(0)
-        json.dump(events, f, indent=2)
+    if DB_AVAILABLE:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO events (id, timestamp, epoch, type, payload) VALUES (?, ?, ?, ?, ?)",
+            (event["id"], event["timestamp"], event["epoch"], event["type"], json.dumps(event["payload"]))
+        )
+        conn.commit()
+        conn.close()
+            
     return event
 
 def get_events(event_type: str = None, limit: int = 500) -> list:
     """Retrieve events, optionally filtered by type."""
-    _ensure_log()
-    with open(EVENT_LOG_PATH, "r") as f:
-        events = json.load(f)
+    if not DB_AVAILABLE:
+        return []
+        
+    conn = get_db()
+    cursor = conn.cursor()
+    
     if event_type:
-        events = [e for e in events if e["type"] == event_type]
-    return events[-limit:]
+        cursor.execute("SELECT * FROM events WHERE type = ? ORDER BY epoch ASC LIMIT ?", (event_type, limit))
+    else:
+        cursor.execute("SELECT * FROM events ORDER BY epoch ASC LIMIT ?", (limit,))
+        
+    rows = cursor.fetchall()
+    conn.close()
+    
+    events = []
+    for row in rows:
+        events.append({
+            "id": row["id"],
+            "timestamp": row["timestamp"],
+            "epoch": row["epoch"],
+            "type": row["type"],
+            "payload": json.loads(row["payload"])
+        })
+        
+    return events
 
 def clear_events():
     """Clear all events (used on pipeline reset)."""
-    _ensure_log()
-    with open(EVENT_LOG_PATH, "w") as f:
-        json.dump([], f)
+    if DB_AVAILABLE:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM events")
+        conn.commit()
+        conn.close()
