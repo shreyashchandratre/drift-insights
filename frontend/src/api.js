@@ -1,5 +1,18 @@
 import axios from 'axios';
+import { auth } from './firebase/config';
+
 const API = axios.create({ baseURL: 'http://localhost:8000' });
+
+API.interceptors.request.use(async (config) => {
+  const user = auth.currentUser;
+  if (user) {
+    const token = await user.getIdToken();
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+}, (error) => {
+  return Promise.reject(error);
+});
 
 export const initDemo = () => API.get('/demo-mode');
 export const runDemoFull = () => API.post('/demo-run-full');
@@ -20,6 +33,7 @@ export const runShap = () => API.post('/shap-analysis');
 export const runAdapt = () => API.post('/adapt');
 export const classifyDriftType = (payload) => API.post('/api/drift/classify-type', payload);
 export const runFeatureGuidedRetrain = (payload) => API.post('/api/retrain/feature-guided', payload);
+export const sendChatMessage = (payload) => API.post('/api/chat', payload);
 export const getEvents = (type) => API.get('/events', { params: { event_type: type } });
 export const getStatus = () => API.get('/status');
 export const getSettings = () => API.get('/settings');

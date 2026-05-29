@@ -13,8 +13,14 @@ import PhaseRetrain from './components/PhaseRetrain';
 import PhaseMonitor from './components/PhaseMonitor';
 import EventLog from './components/EventLog';
 import DriftTypeClassifier from './components/DriftTypeClassifier';
+import ChatWidget from './components/ChatWidget';
+import Login from './components/Login';
+import { useAuth } from './context/AuthContext';
+import { auth, signOut } from './firebase/config';
+import { LogOut } from 'lucide-react';
 
 export default function App() {
+  const { currentUser } = useAuth();
   const [phase, setPhase] = useState(0);
   const [completed, setCompleted] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -171,6 +177,10 @@ export default function App() {
     setDriftResult(null); setClassificationResult(null); setShapResult(null); setAdaptResult(null); setError(null);
   };
 
+  if (!currentUser) {
+    return <Login />;
+  }
+
   return (
     <div className="min-h-screen bg-[#F8FAFC] font-sans pb-20">
       {/* HEADER */}
@@ -196,6 +206,9 @@ export default function App() {
           </button>
           <button onClick={() => setSettingsOpen(true)} className="p-2 text-[#64748B] hover:text-[#0F172A] hover:bg-slate-100 rounded-lg transition-colors">
             <Settings size={20} />
+          </button>
+          <button onClick={() => signOut(auth)} className="flex items-center gap-2 text-xs bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded border border-red-200 transition-colors">
+            <LogOut size={14} /> Logout
           </button>
         </div>
       </header>
@@ -229,6 +242,7 @@ export default function App() {
 
       <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} settings={settings} setSettings={setSettings} />
       <EventLog open={eventsOpen} onClose={() => setEventsOpen(false)} />
+      <ChatWidget currentPhase={phase} />
     </div>
   );
 }

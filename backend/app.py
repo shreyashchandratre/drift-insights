@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import pandas as pd
@@ -13,9 +13,11 @@ from logic.data_generation import simulate_drift, generate_gaussian_dataset, cre
 from logic.adaptation import classify_severity, execute_adaptation
 from logic.event_store import log_event, get_events, clear_events
 from logic.report_generator import generate_drift_report_pdf
+from auth import verify_token
 from explainability.baseline_report import generate_baseline_report
 from detection.drift_type_classifier import DriftTypeClassifier
 from adaptation.feature_guided_retrain import feature_guided_retrain
+from logic.ai_assistant import ask_cerebras
 from pydantic import BaseModel
 from typing import List, Dict
 
@@ -44,7 +46,7 @@ def root():
     return {"message": "DriftInsights API running", "model_version": f"M_{S['model_version']}"}
 
 @app.post("/upload-model")
-async def upload_model(model_file: UploadFile = File(...), csv_file: UploadFile = File(...)):
+async def upload_model(model_file: UploadFile = File(...), csv_file: UploadFile = File(...), user: dict = Depends(verify_token)):
     try:
         model = joblib.load(io.BytesIO(await model_file.read()))
         df = pd.read_csv(io.BytesIO(await csv_file.read()))
@@ -85,7 +87,7 @@ async def upload_model(model_file: UploadFile = File(...), csv_file: UploadFile 
         raise HTTPException(400, str(e))
 
 @app.post("/upload-new-data")
-async def upload_new_data(csv_file: UploadFile = File(...)):
+async def upload_new_data(csv_file: UploadFile = File(...), user: dict = Depends(verify_token)):
     if S["baseline_df"] is None:
         raise HTTPException(400, "Baseline not uploaded")
     df = pd.read_csv(io.BytesIO(await csv_file.read()))
@@ -104,7 +106,7 @@ async def upload_new_data(csv_file: UploadFile = File(...)):
     return {"message": "Data uploaded", "rows": len(df), "drifted_features": common[:5], "dist_data": dist_data}
 
 @app.post("/simulate-drift")
-async def run_simulate_drift(shift_amount: float = Form(1.0), num_features: int = Form(3)):
+async def run_simulate_drift(shift_amount: float = Form(1.0), num_features: int = Form(3), user: dict = Depends(verify_token)):
     if S["baseline_df"] is None:
         raise HTTPException(400, "Baseline not uploaded")
     drifted_df, selected = simulate_drift(S["baseline_df"], num_features, shift_amount)
@@ -119,7 +121,7 @@ async def run_simulate_drift(shift_amount: float = Form(1.0), num_features: int 
     return {"message": f"Drift simulated: {', '.join(selected)}", "drifted_features": selected, "dist_data": dist_data}
 
 @app.post("/detect-drift")
-async def run_detect_drift(adwin_delta: float = Form(0.002)):
+async def run_detect_drift(adwin_delta: float = Form(0.002), user: dict = Depends(verify_token)):
     if S["model"] is None or S["new_df"] is None:
         raise HTTPException(400, "Model or data missing")
     model, features = S["model"], S["features"]
@@ -158,7 +160,7 @@ async def run_detect_drift(adwin_delta: float = Form(0.002)):
             "error_change": pre_post.get("error_change", post_err - pre_err)}
 
 @app.post("/shap-analysis")
-async def run_shap():
+async def run_shap(user: dict = Depends(verify_token)):
     if S["model"] is None or S["new_df"] is None:
         raise HTTPException(400, "Required data missing")
     features = S["features"]
@@ -185,7 +187,7 @@ async def run_shap():
     return {"report": report, "delta_e_total": delta_e_total, "severity": severity, "shap_summary": shap_summary}
 
 @app.post("/adapt")
-async def run_adaptation():
+async def run_adaptation(user: dict = Depends(verify_token)):
     if S["model"] is None or S["severity"] is None:
         raise HTTPException(400, "Run SHAP analysis first")
     features = S["features"]
@@ -222,18 +224,19 @@ async def run_adaptation():
 @app.post("/settings")
 async def update_settings(adwin_delta: float = Form(0.002), minor_threshold: float = Form(0.15),
                            severe_threshold: float = Form(0.40), validation_threshold: float = Form(0.80),
-                           cooldown_samples: int = Form(500), window_size: int = Form(200)):
+                           cooldown_samples: int = Form(500), window_size: int = Form(200),
+                           user: dict = Depends(verify_token)):
     S["settings"] = {"adwin_delta": adwin_delta, "minor_threshold": minor_threshold,
                      "severe_threshold": severe_threshold, "validation_threshold": validation_threshold,
                      "cooldown_samples": cooldown_samples, "window_size": window_size}
     return {"message": "Settings updated", "settings": S["settings"]}
 
 @app.get("/settings")
-def get_settings():
+def get_settings(user: dict = Depends(verify_token)):
     return S["settings"]
 
 @app.get("/api/baseline/report")
-def get_baseline_report():
+def get_baseline_report(user: dict = Depends(verify_token)):
     if not S["baseline_report"]:
         raise HTTPException(404, "Baseline report not found")
     return S["baseline_report"]
@@ -245,7 +248,7 @@ class ClassifyRequest(BaseModel):
     drift_history: List[dict] = []
 
 @app.post("/api/drift/classify-type")
-def classify_drift_type(req: ClassifyRequest):
+def classify_drift_type(req: ClassifyRequest, user: dict = Depends(verify_token)):
     classifier = DriftTypeClassifier()
     result = classifier.classify(req.error_rate_series, req.change_point_index, req.top_k_features, req.drift_history)
     S["drift_type_result"] = result
@@ -258,6 +261,31 @@ def classify_drift_type(req: ClassifyRequest):
     })
     return result
 
+class ChatRequest(BaseModel):
+    message: str
+    phase: int
+
+@app.post("/api/chat")
+def chat_with_cerebras(req: ChatRequest, user: dict = Depends(verify_token)):
+    # Only copy safe primitive state
+    context_state = {
+        "model_type": S.get("model_type"),
+        "model_version": S.get("model_version"),
+        "features": S.get("features", []),
+        "drift_results": S.get("drift_results"),
+        "shap_report": S.get("shap_report"),
+        "severity": S.get("severity"),
+        "adaptation_result": S.get("adaptation_result"),
+        "baseline_report": S.get("baseline_report"),
+        "drift_type_result": S.get("drift_type_result"),
+        "settings": S.get("settings"),
+        "phase": req.phase
+    }
+    
+    answer = ask_cerebras(req.message, context_state)
+    log_event("AI_CHAT", {"question": req.message, "phase": req.phase})
+    return {"answer": answer}
+
 class FeatureGuidedRequest(BaseModel):
     severity: str
     top_k_features: List[str]
@@ -266,7 +294,7 @@ class FeatureGuidedRequest(BaseModel):
     decay_rate: float = 0.005
 
 @app.post("/api/retrain/feature-guided")
-def run_feature_guided_retrain(req: FeatureGuidedRequest):
+def run_feature_guided_retrain(req: FeatureGuidedRequest, user: dict = Depends(verify_token)):
     if S["model"] is None or S["rolling_buffer"] is None:
         raise HTTPException(400, "Model or data missing")
         
@@ -305,18 +333,18 @@ def run_feature_guided_retrain(req: FeatureGuidedRequest):
     return response_data
 
 @app.get("/events")
-def list_events(event_type: str = None, limit: int = 200):
+def list_events(event_type: str = None, limit: int = 200, user: dict = Depends(verify_token)):
     return get_events(event_type, limit)
 
 @app.get("/status")
-def pipeline_status():
+def pipeline_status(user: dict = Depends(verify_token)):
     return {"model_loaded": S["model"] is not None, "model_type": S["model_type"],
             "model_version": f"M_{S['model_version']}", "has_baseline": S["baseline_df"] is not None,
             "has_new_data": S["new_df"] is not None, "drift_detected": bool(S["drift_results"] and S["drift_results"].get("drift_indices")),
             "severity": S["severity"], "delta_e_total": S["delta_e_total"]}
 
 @app.get("/download-model")
-def download_model():
+def download_model(user: dict = Depends(verify_token)):
     if S["model"] is None:
         raise HTTPException(400, "No model loaded or available to download.")
     
@@ -330,7 +358,7 @@ def download_model():
                              headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 @app.get("/download-report-csv")
-def download_csv():
+def download_csv(user: dict = Depends(verify_token)):
     if not S["shap_report"]:
         raise HTTPException(400, "No SHAP report available")
     rows = ["Feature,SHAP_Before,SHAP_After,Delta_E,Direction"]
@@ -341,7 +369,7 @@ def download_csv():
                              headers={"Content-Disposition": "attachment; filename=drift_report.csv"})
 
 @app.get("/download-report-pdf")
-def download_pdf():
+def download_pdf(user: dict = Depends(verify_token)):
     if not S["shap_report"]:
         raise HTTPException(400, "No report data")
     data = {
