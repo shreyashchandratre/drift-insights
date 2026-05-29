@@ -2,6 +2,8 @@
 node_modules/
 dist/
 .env
+.env.local
+.env.*.local
 
 # Python
 __pycache__/
@@ -12,9 +14,19 @@ venv/
 env/
 .env
 
+# Secrets & credentials
+*.json
+!package.json
+!package-lock.json
+!tsconfig*.json
+!vite.config.*
+backend/firebase-adminsdk.json
+backend/*.json
+
 # Project Specific
 backend/data/*.joblib
 backend/data/*.csv
+backend/data/event_log.json
 !backend/data/baseline.csv
 !backend/data/demo_model.joblib
 
